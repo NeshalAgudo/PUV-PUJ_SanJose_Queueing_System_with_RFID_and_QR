@@ -2,7 +2,7 @@ const Vehicle = require('../models/Vehicle');
 const Queueing = require('../models/Queueing');
 // const { printTicket } = require('../services/printService');
 const { printThermalTicket } = require('../services/thermalPrintService');
-const { broadcast } = require('../websocket/websocket');
+// const { broadcast } = require('../websocket/websocket');
 
 const vehicleController = {
   // Search vehicle by RFID or plate number

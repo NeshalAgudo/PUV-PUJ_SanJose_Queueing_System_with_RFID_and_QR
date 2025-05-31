@@ -5,7 +5,7 @@ const helmet = require("helmet");
 const connectDB = require("./config/db");
 const path = require('path');
 const http = require('http');
-const { setupWebSocket } = require('../queueing-system-backend/websocket/websocket');
+// const { setupWebSocket } = require('../queueing-system-backend/websocket/websocket');
 
 // Load environment variables
 dotenv.config();
@@ -15,7 +15,7 @@ const app = express();
 const server = http.createServer(app);
 
 // Setup WebSocket
-setupWebSocket(server);
+// setupWebSocket(server);
 
 // Connect to database
 connectDB();
