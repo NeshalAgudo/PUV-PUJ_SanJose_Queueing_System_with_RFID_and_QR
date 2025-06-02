@@ -205,6 +205,16 @@ const vehicleSchema = new mongoose.Schema({
     default: null,
     required: false 
   },
+  images: [{
+    data: Buffer,
+    contentType: String,
+    filename: String,
+    size: Number,
+    uploadDate: {
+      type: Date,
+      default: Date.now
+    }
+  }],
   createdAt: {
     type: Date,
     default: Date.now

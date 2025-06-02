@@ -1317,4 +1317,3 @@ exports.getPenaltyVehicles = async (req, res) => {
 };
 //----------------------------------------ADmin dashboard -----------------------------------------
 
-

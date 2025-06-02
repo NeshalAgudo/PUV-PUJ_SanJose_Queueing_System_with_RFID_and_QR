@@ -225,6 +225,106 @@
   }
 };
 
+//----------------------------------------ADmin vechicle management image uplopad-----------------------------------------
+
+exports.uploadVehicleImages = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const files = req.files;
+    
+    if (!files || files.length === 0) {
+      return res.status(400).json({ success: false, message: 'No files uploaded' });
+    }
+
+    // Limit to 5 images
+    if (files.length > 5) {
+      return res.status(400).json({ success: false, message: 'Maximum 5 images allowed' });
+    }
+
+    const vehicle = await Vehicle.findById(id);
+    if (!vehicle) {
+      return res.status(404).json({ success: false, message: 'Vehicle not found' });
+    }
+
+    // Process each file
+    const imageUploads = files.map(file => ({
+      data: file.buffer,
+      contentType: file.mimetype,
+      filename: file.originalname,
+      size: file.size
+    }));
+
+    // Add new images (but don't exceed 5 total)
+    const remainingSlots = 5 - vehicle.images.length;
+    if (remainingSlots <= 0) {
+      return res.status(400).json({ success: false, message: 'Vehicle already has maximum 5 images' });
+    }
+
+    vehicle.images.push(...imageUploads.slice(0, remainingSlots));
+    await vehicle.save();
+
+    res.status(200).json({ 
+      success: true,
+      message: 'Images uploaded successfully',
+      data: vehicle.images
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+};
+
+exports.getVehicleImage = async (req, res) => {
+  try {
+    const { id, imageIndex } = req.params;
+    const vehicle = await Vehicle.findById(id);
+    
+    if (!vehicle || !vehicle.images[imageIndex]) {
+      return res.status(404).json({ success: false, message: 'Image not found' });
+    }
+
+    const image = vehicle.images[imageIndex];
+    res.set('Content-Type', image.contentType);
+    res.send(image.data);
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+};
+
+// In vehicleController.js
+exports.deleteVehicleImage = async (req, res) => {
+  try {
+    const { id, imageIndex } = req.params;
+    const vehicle = await Vehicle.findById(id);
+    
+    if (!vehicle || !vehicle.images[imageIndex]) {
+      return res.status(404).json({ success: false, message: 'Image not found' });
+    }
+
+    vehicle.images.splice(imageIndex, 1);
+    await vehicle.save();
+
+    res.status(200).json({ 
+      success: true,
+      message: 'Image deleted successfully'
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
+  }
+};
+//----------------------------------------ADmin vechicle management image uplopad-----------------------------------------
+
+
+
+
  /*
 exports.getVehiclesByStatus = async (req, res) => {
   try {

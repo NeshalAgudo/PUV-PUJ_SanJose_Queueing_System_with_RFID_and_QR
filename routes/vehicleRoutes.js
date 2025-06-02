@@ -65,6 +65,21 @@ const handleUploadErrors = (err, req, res, next) => {
   next();
 };
 
+
+const uploadimage = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB limit per file
+    files: 5 // Max 5 files
+  }
+});
+
+// ... existing routes ...
+router.post('/:id/images', uploadimage.array('images', 5), vehicleController.uploadVehicleImages);
+router.get('/:id/images/:imageIndex', vehicleController.getVehicleImage);
+router.delete('/:id/images/:imageIndex', vehicleController.deleteVehicleImage);
+
+
 router.post('/register', vehicleController.registerVehicle);
 router.post('/batch-import', upload.single('file'), handleUploadErrors, vehicleController.batchImport);
 router.get('/', vehicleController.getAllVehicles);
