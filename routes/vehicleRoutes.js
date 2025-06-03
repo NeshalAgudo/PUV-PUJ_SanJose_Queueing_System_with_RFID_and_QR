@@ -76,7 +76,7 @@ const uploadimage = multer({
 
 // ... existing routes ...
 router.post('/:id/images', uploadimage.array('images', 5), vehicleController.uploadVehicleImages);
-router.get('/:id/images/:imageIndex', vehicleController.getVehicleImage);
+router.get('/:id/images/:imageId', vehicleController.getVehicleImage);
 router.delete('/:id/images/:imageId', vehicleController.deleteVehicleImage);
 
 

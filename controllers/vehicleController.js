@@ -278,21 +278,18 @@ exports.uploadVehicleImages = async (req, res) => {
 
 exports.getVehicleImage = async (req, res) => {
   try {
-    const { id, imageIndex } = req.params;
+    const { id, imageId } = req.params;
     const vehicle = await Vehicle.findById(id);
     
-    if (!vehicle || !vehicle.images[imageIndex]) {
+    const image = vehicle.images.find(img => img._id.equals(imageId));
+    if (!image) {
       return res.status(404).json({ success: false, message: 'Image not found' });
     }
 
-    const image = vehicle.images[imageIndex];
     res.set('Content-Type', image.contentType);
     res.send(image.data);
   } catch (error) {
-    res.status(500).json({ 
-      success: false,
-      message: error.message 
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
