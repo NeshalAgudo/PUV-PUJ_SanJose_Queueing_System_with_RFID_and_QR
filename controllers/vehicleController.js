@@ -297,12 +297,20 @@ exports.getVehicleImage = async (req, res) => {
 };
 
 // In vehicleController.js
+// In vehicleController.js
 exports.deleteVehicleImage = async (req, res) => {
   try {
-    const { id, imageIndex } = req.params;
+    const { id, imageId } = req.params;
     const vehicle = await Vehicle.findById(id);
     
-    if (!vehicle || !vehicle.images[imageIndex]) {
+    if (!vehicle) {
+      return res.status(404).json({ success: false, message: 'Vehicle not found' });
+    }
+
+    // Find index by ID instead of using direct index
+    const imageIndex = vehicle.images.findIndex(img => img._id.equals(imageId));
+    
+    if (imageIndex === -1) {
       return res.status(404).json({ success: false, message: 'Image not found' });
     }
 
@@ -311,7 +319,8 @@ exports.deleteVehicleImage = async (req, res) => {
 
     res.status(200).json({ 
       success: true,
-      message: 'Image deleted successfully'
+      message: 'Image deleted successfully',
+      data: vehicle.images // Return updated images array
     });
   } catch (error) {
     res.status(500).json({ 

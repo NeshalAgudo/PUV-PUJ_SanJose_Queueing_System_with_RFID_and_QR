@@ -205,15 +205,13 @@ const vehicleSchema = new mongoose.Schema({
     default: null,
     required: false 
   },
-  images: [{
+ images: [{
+    _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
     data: Buffer,
     contentType: String,
     filename: String,
     size: Number,
-    uploadDate: {
-      type: Date,
-      default: Date.now
-    }
+    uploadedAt: { type: Date, default: Date.now }
   }],
   createdAt: {
     type: Date,
