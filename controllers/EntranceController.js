@@ -1,7 +1,7 @@
 const Vehicle = require('../models/Vehicle');
 const EntryLog = require('../models/EntryLog');
 const moment = require('moment');
-const FdRoute = require('../models/FDRoute');
+const FdRoute = require('../models/FdRoute');
 const { notifySystemUpdate, notifyEntryLogsUpdate } = require('../websocket/websocket');
 
 // Helper to check if we need to reset queue numbers (after midnight)
