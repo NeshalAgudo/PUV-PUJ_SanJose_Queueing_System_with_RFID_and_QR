@@ -1,30 +1,42 @@
 const Vehicle = require('../models/Vehicle');
 const EntryLog = require('../models/EntryLog');
 const moment = require('moment');
+const FdRoute = require('../models/FDRoute');
+const { notifySystemUpdate, notifyEntryLogsUpdate } = require('../websocket/websocket');
 
 // Helper to check if we need to reset queue numbers (after midnight)
 const shouldResetQueueNumber = (lastEntry) => {
   if (!lastEntry) return true;
   
-  const lastEntryDate = moment(lastEntry.timestamp);
-  const currentDate = moment();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
   
-  return !lastEntryDate.isSame(currentDate, 'day');
+  return lastEntry.timestamp < today;
 };
 
 // Get next queue number with daily reset
 const getNextQueueNumber = async () => {
-  const lastEntry = await EntryLog.findOne({ queueing_number: { $exists: true } })
+  // Get the most recent entry log (regardless of whether it has a queue number)
+  const lastEntry = await EntryLog.findOne()
     .sort({ timestamp: -1 })
     .limit(1);
 
-  if (shouldResetQueueNumber(lastEntry)) {
-    return 1; // Reset to 1 for new day
+  // Get today's date at midnight
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // If no entries exist or last entry was before today, reset to 1
+  if (!lastEntry || lastEntry.timestamp < today) {
+    return 1;
   }
 
-  const highestQueue = await EntryLog.findOne({ queueing_number: { $exists: true } })
-    .sort({ queueing_number: -1 })
-    .limit(1);
+  // Otherwise, get the highest queue number from today
+  const highestQueue = await EntryLog.findOne({
+    queueing_number: { $exists: true },
+    timestamp: { $gte: today }
+  })
+  .sort({ queueing_number: -1 })
+  .limit(1);
 
   return highestQueue ? highestQueue.queueing_number + 1 : 1;
 };
@@ -184,6 +196,7 @@ exports.searchVehicle = async (req, res) => {
         status: vehicle.status, 
       }
     });
+    notifySystemUpdate();
 
   } catch (error) {
     console.error('Search error:', error);
@@ -296,6 +309,7 @@ exports.clearVehicle = async (req, res) => {
         }
       });
     }
+    notifySystemUpdate();
 
     res.json({ success: true, promoted: false });
   } catch (error) {
@@ -395,6 +409,7 @@ const generateTicketId = async () => {
           message: 'Active vehicle log not found' 
         });
       }
+      notifySystemUpdate();
   
       res.json({ 
         success: true,
@@ -414,38 +429,53 @@ const generateTicketId = async () => {
 // In entranceController.js
 // In entranceController.js
 // Renamed to updateEntryLogFd to be explicit
+// Update your updateEntryLogFd function in entranceController.js
 exports.updateEntryLogFd = async (req, res) => {
   try {
     const { plateNumber, fd } = req.body;
     
-    // Only updates the active EntryLog entry
+    // Validate that the FD route exists and is active
+    const validRoute = await FdRoute.findOne({ 
+      code: fd, 
+      isActive: true 
+    });
+    
+    if (!validRoute) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid FD route' 
+      });
+    }
+
+    // Update the active EntryLog entry
     const updatedLog = await EntryLog.findOneAndUpdate(
       { 
         plateNumber: plateNumber.toUpperCase(),
-        cleared: { $ne: true } // Only active entries
+        cleared: { $ne: true }
       },
-      { $set: { FD: fd } }, // Updates only this entry's FD
+      { $set: { FD: fd } },
       { new: true }
     );
 
     if (!updatedLog) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Active entry log not found' // Updated message
+        message: 'Active entry log not found'
       });
     }
+    notifySystemUpdate();
 
     res.json({ 
       success: true,
       plateNumber: updatedLog.plateNumber,
       updatedFd: updatedLog.FD,
-      message: 'Updated FD for current entry only'
+      message: 'Updated FD for current entry'
     });
   } catch (error) {
     console.error('EntryLog FD update error:', error);
     res.status(500).json({ 
       success: false, 
-      message: 'Failed to update entry log FD' // Updated message
+      message: 'Failed to update entry log FD'
     });
   }
 };
@@ -1317,3 +1347,62 @@ exports.getPenaltyVehicles = async (req, res) => {
 };
 //----------------------------------------ADmin dashboard -----------------------------------------
 
+// Add to entranceController.js
+// In entranceController.js
+exports.getActiveVehicles = async (req, res) => {
+  try {
+    // Get all active (non-cleared) entry logs
+    const activeLogs = await EntryLog.find({ 
+      cleared: { $ne: true },
+      status: 'active' // Only get active logs, not queued ones
+    })
+    .sort({ timestamp: 1 }) // Sort by oldest first
+    .populate('vehicle');
+
+    // Separate into entry and exit sections
+    const entryLog = activeLogs.find(log => log.action === 'entry');
+    const exitLog = activeLogs.find(log => log.action === 'exit');
+    
+    // Get queued vehicles
+    const queuedEntries = await EntryLog.find({
+      action: 'entry',
+      status: 'queued'
+    }).sort({ timestamp: 1 }).populate('vehicle');
+    
+    const queuedExits = await EntryLog.find({
+      action: 'exit',
+      status: 'queued'
+    }).sort({ timestamp: 1 }).populate('vehicle');
+
+    // Format the response - ensure all fields are strings
+     const formatVehicle = (log) => {
+      const timeIn = log.timeIN ? new Date(log.timeIN).toISOString() : null;
+      
+      return {
+        plateNumber: log.plateNumber?.toString() || '',
+        driverName: log.vehicle?.driverName?.toString() || '',
+        route: (log.route || log.vehicle?.route)?.toString() || '',
+        FD: (log.FD || log.vehicle?.FD)?.toString() || '',
+        status: (log.vehicle?.status || 'Ok')?.toString(),
+        queueNumber: log.queueing_number?.toString() || '',
+        pass: (log.Pass || log.vehicle?.Pass || (log.FD === 'FD1' ? 'Pila' : 'Taxi'))?.toString(),
+        timeIn: timeIn || ''
+      };
+    };
+
+    res.json({
+      success: true,
+      entryVehicle: entryLog ? formatVehicle(entryLog) : null,
+      exitVehicle: exitLog ? formatVehicle(exitLog) : null,
+      entryQueue: queuedEntries.map(formatVehicle),
+      exitQueue: queuedExits.map(formatVehicle)
+    });
+  } catch (error) {
+    console.error('Get active vehicles error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to get active vehicles',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

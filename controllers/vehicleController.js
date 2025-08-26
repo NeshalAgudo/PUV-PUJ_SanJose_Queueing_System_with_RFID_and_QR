@@ -184,7 +184,7 @@
     const updates = req.body;
 
     // Remove fields that shouldn't be updated
-    const disallowedUpdates = ['status', 'registrationDate', 'expiryDate', 'createdAt'];
+    const disallowedUpdates = ['status', 'createdAt'];
     disallowedUpdates.forEach(field => delete updates[field]);
 
     // Get current vehicle data

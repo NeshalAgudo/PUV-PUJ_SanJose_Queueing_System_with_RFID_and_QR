@@ -11,7 +11,7 @@ exports.getAllUsers = async (req, res) => {
     const users = await User.find({
       role: { 
         $not: /admin/i // Excludes 'Admin', 'admin', 'ADMIN', etc.
-      }
+      },
     }).select('-password -twoFactorSecret -resetToken -resetTokenExpiry');
 
     console.log('Filtered users:', users.map(u => u.username));
@@ -104,23 +104,55 @@ exports.updateUser = async (req, res) => {
 };
 
 // Delete user (admin only)
-exports.deleteUser = async (req, res) => {
+exports.disableUser = async (req, res) => {
   try {
     const userId = req.params.id;
-
-    // Prevent admin from deleting themselves
+    
+    // Prevent disabling yourself
     if (userId === req.user._id.toString()) {
-      return res.status(400).json({ message: 'Cannot delete your own account' });
+      return res.status(400).json({ message: 'Cannot disable your own account' });
     }
 
-    const deletedUser = await User.findByIdAndDelete(userId);
-    if (!deletedUser) {
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { 
+        disabled: true,
+        disabledAt: new Date()
+      },
+      { new: true }
+    ).select('-password -twoFactorSecret -resetToken -resetTokenExpiry');
+
+    if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }
 
-    res.json({ message: 'User deleted successfully' });
+    res.json(user);
   } catch (error) {
-    console.error('Error deleting user:', error);
+    console.error('Error disabling user:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.enableUser = async (req, res) => {
+  try {
+    const userId = req.params.id;
+    
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { 
+        disabled: false,
+        disabledAt: null
+      },
+      { new: true }
+    ).select('-password -twoFactorSecret -resetToken -resetTokenExpiry');
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json(user);
+  } catch (error) {
+    console.error('Error enabling user:', error);
     res.status(500).json({ message: 'Server error' });
   }
 };

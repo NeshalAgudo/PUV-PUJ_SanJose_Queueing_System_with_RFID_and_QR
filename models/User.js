@@ -51,9 +51,22 @@ const UserSchema = new mongoose.Schema({
     type: Date,
     select: false
   },
+    passwordResetOTP: {
+    code: String,
+    expiresAt: Date,
+    attempts: { type: Number, default: 0 },
+    verified: { type: Boolean, default: false }
+  },
   lastActive: {
     type: Date
-  }
+  },
+    disabled: {
+    type: Boolean,
+    default: false
+  },
+  disabledAt: {
+    type: Date
+  },
 }, {
   timestamps: true,
   toJSON: {
@@ -65,6 +78,7 @@ const UserSchema = new mongoose.Schema({
       delete ret.twoFactorSecret;
       delete ret.resetToken;
       delete ret.resetTokenExpiry;
+      delete ret.passwordResetOTP;
       return ret;
     }
   }

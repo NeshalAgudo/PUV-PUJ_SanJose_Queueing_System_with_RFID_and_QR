@@ -5,8 +5,9 @@ const helmet = require("helmet");
 const connectDB = require("./config/db");
 const path = require('path');
 const http = require('http');
+const { setupWebSocket, notifySystemUpdate, notifyEntryLogsUpdate } = require('./websocket/websocket');
 // const { setupWebSocket } = require('../queueing-system-backend/websocket/websocket');
-
+const fdRoutes = require('./routes/fdRoutes');
 // Load environment variables
 dotenv.config();
 
@@ -16,6 +17,8 @@ const server = http.createServer(app);
 
 // Setup WebSocket
 // setupWebSocket(server);
+// Setup WebSocket
+setupWebSocket(server);
 
 // Connect to database
 connectDB();
@@ -25,7 +28,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT','PATCH', 'DELETE'],
   credentials: true
 }));
 app.use(helmet());
@@ -44,7 +47,7 @@ app.use('/api/scan', require('./routes/vehicleScanRoutes'));
 app.use('/', require('./routes/routes'));
 app.use('/api', require('./routes/routes'));
 app.use('/api/users', require('./routes/routes'));
-
+app.use('/api', fdRoutes);
 // Serve frontend in production
 // if (process.env.NODE_ENV === 'production') {
 //   app.get('*', (req, res) => {
@@ -69,6 +72,13 @@ app.use((req, res) => {
     message: 'Endpoint not found' 
   });
 });
+
+app.use((req, res, next) => {
+  res.notifySystemUpdate = notifySystemUpdate;
+  res.notifyEntryLogsUpdate = notifyEntryLogsUpdate;
+  next();
+});
+
 
 // Start server
 const PORT = process.env.PORT || 5000;

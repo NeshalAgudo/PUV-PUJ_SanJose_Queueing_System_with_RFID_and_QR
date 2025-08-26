@@ -62,6 +62,8 @@ router.put('/api/vehicles/:id', vehicleController.updateVehicle);
 router.get('/users', authenticate, adminOnly, userController.getAllUsers);
 router.post('/', authenticate, adminOnly, userController.createUser);
 router.put('/:id', authenticate, adminOnly, userController.updateUser);
-router.delete('/:id', authenticate, adminOnly, userController.deleteUser);
-
+// router.delete('/:id', authenticate, adminOnly, userController.deleteUser);
+router.patch('/users/:id/disable', authenticate, adminOnly, userController.disableUser);
+router.patch('/users/:id/enable', authenticate, adminOnly, userController.enableUser);
+router.get('/entryLogs/active', entranceController.getActiveVehicles);
 module.exports = router;

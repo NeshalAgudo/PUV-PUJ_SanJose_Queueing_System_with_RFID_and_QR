@@ -187,12 +187,6 @@ const vehicleSchema = new mongoose.Schema({
   expiryDate: {
     type: Date,
     required: true,
-    validate: {
-      validator: function(v) {
-        return v > this.registrationDate;
-      },
-      message: 'Expiry date must be after registration date!'
-    }
   },
   status: {
     type: String,
