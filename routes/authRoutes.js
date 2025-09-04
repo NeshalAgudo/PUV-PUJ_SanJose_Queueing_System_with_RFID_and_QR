@@ -1,6 +1,6 @@
 // routes/authRoutes.js
 const express = require("express");
-const { login, logout } = require("../controllers/authController");
+const { login, logout, generateCaptcha  } = require("../controllers/authController");
 const { 
   initiateReset, 
   verifyOTP, 
@@ -9,6 +9,7 @@ const {
 
 const router = express.Router();
 
+router.get("/captcha", generateCaptcha);
 router.post("/login", login);
 router.post("/logout", logout);
 router.post("/forgot-password", initiateReset);

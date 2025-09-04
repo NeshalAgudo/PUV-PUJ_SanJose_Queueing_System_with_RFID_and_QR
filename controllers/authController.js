@@ -2,10 +2,62 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 
+const captchaChallenges = new Map();
+
+// Generate CAPTCHA challenge
+exports.generateCaptcha = async (req, res) => {
+  try {
+    const num1 = Math.floor(Math.random() * 10);
+    const num2 = Math.floor(Math.random() * 10);
+    const answer = num1 + num2;
+    const captchaId = Math.random().toString(36).substring(2, 15);
+    
+    // Store challenge with expiration (5 minutes)
+    captchaChallenges.set(captchaId, {
+      answer,
+      expires: Date.now() + 5 * 60 * 1000
+    });
+    
+    // Clean up expired challenges
+    for (const [id, challenge] of captchaChallenges.entries()) {
+      if (challenge.expires < Date.now()) {
+        captchaChallenges.delete(id);
+      }
+    }
+    
+    res.json({
+      captchaId,
+      question: `${num1} + ${num2}`
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server error" });
+  }
+};
 
 exports.login = async (req, res) => {
     try {
-        const { username, password } = req.body;
+            const { username, password, captchaAnswer, captchaId } = req.body;
+    
+    // Verify CAPTCHA
+    if (!captchaId || !captchaAnswer) {
+      return res.status(400).json({ message: "CAPTCHA verification required" });
+    }
+    
+    const challenge = captchaChallenges.get(captchaId);
+    if (!challenge) {
+      return res.status(400).json({ message: "Invalid or expired CAPTCHA" });
+    }
+    
+    // Clean up used CAPTCHA
+    captchaChallenges.delete(captchaId);
+    
+    if (challenge.expires < Date.now()) {
+      return res.status(400).json({ message: "CAPTCHA expired" });
+    }
+    
+    if (parseInt(captchaAnswer) !== challenge.answer) {
+      return res.status(400).json({ message: "Incorrect CAPTCHA answer" });
+    }
         const user = await User.findOne({ username });
 
         if (!user || !(await bcrypt.compare(password, user.password))) {
