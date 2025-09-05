@@ -38,11 +38,12 @@ exports.login = async (req, res) => {
     try {
             const { username, password, captchaAnswer, captchaId } = req.body;
     
-    // Verify CAPTCHA
-    if (!captchaId || !captchaAnswer) {
-      return res.status(400).json({ message: "CAPTCHA verification required" });
+    // Input validation
+    if (!username || !password || !captchaAnswer || !captchaId) {
+      return res.status(400).json({ message: "All fields are required" });
     }
     
+    // Verify CAPTCHA first
     const challenge = captchaChallenges.get(captchaId);
     if (!challenge) {
       return res.status(400).json({ message: "Invalid or expired CAPTCHA" });
