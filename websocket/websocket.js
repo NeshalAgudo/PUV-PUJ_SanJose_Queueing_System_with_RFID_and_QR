@@ -64,6 +64,44 @@ async function getCurrentSystemState() {
   }
 }
 
+// Function to get penalty data
+async function getPenaltyData() {
+  try {
+    const penaltyVehicles = await Vehicle.find({ 
+      penaltyStatus: { $in: ['Penalty', 'Lifted'] } 
+    }).lean();
+
+    // Get latest entry log for each penalty vehicle
+    const penaltyData = await Promise.all(
+      penaltyVehicles.map(async (vehicle) => {
+        const latestLog = await EntryLog.findOne({ 
+          plateNumber: vehicle.plateNumber 
+        }).sort({ timeOut: -1 }).lean();
+
+        return {
+          plateNumber: vehicle.plateNumber,
+          status: vehicle.status,
+          penaltyStatus: vehicle.penaltyStatus,
+          reason: latestLog?.touchdown || vehicle.status,
+          timeOut: latestLog?.timeOut,
+          entryLogId: latestLog?._id,
+          vehicleId: vehicle._id,
+          isLifted: vehicle.penaltyStatus === 'Lifted',
+          penaltyLiftedAt: vehicle.penaltyLiftedAt,
+          isLiftedToday: vehicle.penaltyStatus === 'Lifted' && 
+                        vehicle.penaltyLiftedAt && 
+                        new Date().getTime() - new Date(vehicle.penaltyLiftedAt).getTime() < 24 * 60 * 60 * 1000
+        };
+      })
+    );
+
+    return penaltyData;
+  } catch (error) {
+    console.error('Error getting penalty data:', error);
+    return [];
+  }
+}
+
 // Function to broadcast to all connected clients
 function broadcastToAllClients(message) {
   if (!wss) return;
@@ -73,6 +111,13 @@ function broadcastToAllClients(message) {
       client.send(JSON.stringify(message));
     }
   });
+}
+
+// Function to broadcast to specific client
+function sendToClient(client, message) {
+  if (client.readyState === WebSocket.OPEN) {
+    client.send(JSON.stringify(message));
+  }
 }
 
 // Setup WebSocket server
@@ -98,10 +143,17 @@ function setupWebSocket(server) {
       
       // Send current state on connection
       const currentState = await getCurrentSystemState();
-      ws.send(JSON.stringify({
+      sendToClient(ws, {
         type: 'system_update',
         data: currentState
-      }));
+      });
+      
+      // Send penalty data on connection
+      const penaltyData = await getPenaltyData();
+      sendToClient(ws, {
+        type: 'penalty_data',
+        data: penaltyData
+      });
       
       ws.on('message', async function incoming(message) {
         try {
@@ -124,12 +176,46 @@ function setupWebSocket(server) {
                 type: 'entry_logs_update'
               });
               break;
+
+            case 'penalty_lifted':
+              // Handle penalty lifted notification
+              const { plateNumber, vehicleId } = data;
+              broadcastToAllClients({
+                type: 'penalty_lifted',
+                plateNumber,
+                vehicleId,
+                timestamp: new Date().toISOString(),
+                message: `Penalty lifted for ${plateNumber}`
+              });
+              break;
+
+            case 'request_penalty_update':
+              // Send current penalty data to requesting client
+              const currentPenaltyData = await getPenaltyData();
+              sendToClient(ws, {
+                type: 'penalty_data',
+                data: currentPenaltyData
+              });
+              break;
+
+            case 'vehicle_update':
+              // Handle vehicle status updates
+              broadcastToAllClients({
+                type: 'vehicle_update',
+                data: data.data,
+                timestamp: new Date().toISOString()
+              });
+              break;
               
             default:
               console.log('Unknown message type:', data.type);
           }
         } catch (error) {
           console.error('WebSocket message error:', error);
+          sendToClient(ws, {
+            type: 'error',
+            message: 'Failed to process message'
+          });
         }
       });
       
@@ -166,8 +252,41 @@ function notifyEntryLogsUpdate() {
   });
 }
 
+// Function to notify all clients of penalty updates
+async function notifyPenaltyUpdate() {
+  const penaltyData = await getPenaltyData();
+  broadcastToAllClients({
+    type: 'penalty_update',
+    data: penaltyData
+  });
+}
+
+// Function to notify specific penalty lift
+function notifyPenaltyLifted(plateNumber, vehicleId) {
+  broadcastToAllClients({
+    type: 'penalty_lifted',
+    plateNumber,
+    vehicleId,
+    timestamp: new Date().toISOString(),
+    message: `Penalty lifted for ${plateNumber}`
+  });
+}
+
+// Function to notify vehicle updates
+function notifyVehicleUpdate(vehicleData) {
+  broadcastToAllClients({
+    type: 'vehicle_update',
+    data: vehicleData,
+    timestamp: new Date().toISOString()
+  });
+}
+
 module.exports = {
   setupWebSocket,
   notifySystemUpdate,
-  notifyEntryLogsUpdate
+  notifyEntryLogsUpdate,
+  notifyPenaltyUpdate,
+  notifyPenaltyLifted,
+  notifyVehicleUpdate,
+  getPenaltyData
 };

@@ -3,6 +3,7 @@ const EntryLog = require('../models/EntryLog');
 const moment = require('moment');
 const FdRoute = require('../models/FdRoute');
 const { notifySystemUpdate, notifyEntryLogsUpdate } = require('../websocket/websocket');
+const { notifyPenaltyLifted, notifyPenaltyUpdate } = require('../websocket/websocket');
 
 // Helper to check if we need to reset queue numbers (after midnight)
 const shouldResetQueueNumber = (lastEntry) => {
@@ -41,11 +42,11 @@ const getNextQueueNumber = async () => {
   return highestQueue ? highestQueue.queueing_number + 1 : 1;
 };
 
+// Update searchVehicle to set initial touchdown status
 exports.searchVehicle = async (req, res) => {
   try {
     const { identifier } = req.body;
 
-    
     const vehicle = await Vehicle.findOne({
       $or: [
         { rfid: identifier },
@@ -58,11 +59,11 @@ exports.searchVehicle = async (req, res) => {
     }
 
     // Add this check at the beginning
-    if (vehicle.status === 'Penalty') {
+    if (vehicle.penaltyStatus === 'Penalty') {
       return res.json({
         success: false,
         message: 'Vehicle has penalty status',
-        status: 'Penalty'
+        penaltyStatus: 'Penalty'
       });
     }
     
@@ -120,7 +121,7 @@ exports.searchVehicle = async (req, res) => {
     });
 
     if (activeLogSameSection) {
-      // Create queued log entry - Include queue number if FD1 with Pila pass
+      // Create queued log entry with processing status
       const queuedLog = new EntryLog({
         vehicle: vehicle._id,
         plateNumber: vehicle.plateNumber,
@@ -131,7 +132,7 @@ exports.searchVehicle = async (req, res) => {
         FD: vehicle.FD,
         Pass: vehicle.Pass,
         queueing_number: (nextAction === 'entry' && vehicle.FD === 'FD1' && vehicle.Pass === 'Pila') ? queueNumber : undefined,
-        timeIN: nextAction === 'entry' ? new Date() : null
+        timeIN: nextAction === 'entry' ? new Date() : null,
       });
       await queuedLog.save();
 
@@ -145,14 +146,14 @@ exports.searchVehicle = async (req, res) => {
           route: vehicle.route,
           FD: vehicle.FD,
           Pass: vehicle.Pass,
-          queueing_number: queuedLog.queueing_number, // Include queue number in response
-          timeIN: queuedLog.timeIN
+          queueing_number: queuedLog.queueing_number,
+          timeIN: queuedLog.timeIN,
         }
       });
     }
 
     if (shouldCreateNewLog) {
-      // Create new log entry
+      // Create new log entry with processing status
       const newLog = new EntryLog({
         vehicle: vehicle._id,
         plateNumber: vehicle.plateNumber,
@@ -163,16 +164,17 @@ exports.searchVehicle = async (req, res) => {
         FD: vehicle.FD,
         Pass: vehicle.Pass,
         queueing_number: queueNumber,
-        timeIN: nextAction === 'entry' ? new Date() : null
+        timeIN: nextAction === 'entry' ? new Date() : null,
+
       });
       await newLog.save();
     } else {
-      // Update existing entry for exit action
+      // Update existing entry for exit action with processing status
       await EntryLog.findByIdAndUpdate(lastLog._id, {
         action: 'exit',
         status: 'active',
         cleared: false,
-        timestamp: new Date()
+        timestamp: new Date(),
       });
     }
 
@@ -193,7 +195,7 @@ exports.searchVehicle = async (req, res) => {
         Pass: currentLog?.Pass || vehicle.Pass,
         queueing_number: currentLog?.queueing_number,
         timeIN: currentLog?.timeIN,
-        status: vehicle.status, 
+        status: vehicle.status,
       }
     });
     notifySystemUpdate();
@@ -209,15 +211,14 @@ exports.searchVehicle = async (req, res) => {
 };
 
 // Update clearVehicle to handle timeOut updates
-// Update clearVehicle to only update timeOut for exit actions
 exports.clearVehicle = async (req, res) => {
   try {
     const { plateNumber, isExit } = req.body;
 
+    // Generate ticket ID once to ensure consistency
+    const ticketId = isExit ? await generateTicketId() : null;
+    const qrData = isExit ? `vehicle:${plateNumber}|ticket:${ticketId}|time:${Date.now()}` : null;
     
-     // Generate ticket ID once to ensure consistency
-     const ticketId = isExit ? await generateTicketId() : null;
-     const qrData = isExit ? `vehicle:${plateNumber}|ticket:${ticketId}|time:${Date.now()}` : null;
     // First find the active log to clear
     const clearedLog = await EntryLog.findOneAndUpdate(
       { 
@@ -237,30 +238,78 @@ exports.clearVehicle = async (req, res) => {
         } 
       },
       { new: true }
-    );
+    ).populate('vehicle');
 
     if (!clearedLog) {
       return res.status(404).json({ success: false, message: 'Vehicle not found' });
     }
-    
 
-    // For exit actions, ensure we update the original entry log with timeOut
+    // Update touchdown status - THIS IS THE KEY FIX
     if (isExit) {
+      // Determine the correct touchdown status based on FD and Pass
+      let touchdownStatus;
+      if (clearedLog.FD === 'FD1' && clearedLog.Pass === 'Pila') {
+        touchdownStatus = 'dispatch';
+      } else {
+        touchdownStatus = 'ongoing';
+      }
+
+      // Update the CURRENT entry log (the one we just cleared) with touchdown status
+      await EntryLog.findByIdAndUpdate(
+        clearedLog._id,
+        { 
+          $set: { 
+            touchdown: touchdownStatus // Set the correct touchdown status for exit
+          } 
+        }
+      );
+
+      // Also update the original entry log for consistency
       await EntryLog.findOneAndUpdate(
         { 
           plateNumber: plateNumber.toUpperCase(),
           action: 'entry',
           cleared: true
         },
-        { $set: { timeOut: new Date(),
-          ticket_id: ticketId,  // Add ticket_id to the original entry
-            qr_code_data: qrData // Add QR code data to the original entry  
-         } },
+        { 
+          $set: { 
+            timeOut: new Date(),
+            ticket_id: ticketId,
+            qr_code_data: qrData,
+            touchdown: touchdownStatus
+          } 
+        },
+        { sort: { timestamp: -1 } }
+      );
+    } else {
+      // For entry actions: set to waiting after confirmation
+      // Update the CURRENT entry log
+      await EntryLog.findByIdAndUpdate(
+        clearedLog._id,
+        { 
+          $set: { 
+            touchdown: 'waiting' // Set to waiting when entry is confirmed
+          } 
+        }
+      );
+
+      // Also update the original entry log for consistency
+      await EntryLog.findOneAndUpdate(
+        { 
+          plateNumber: plateNumber.toUpperCase(),
+          action: 'entry',
+          cleared: true
+        },
+        { 
+          $set: { 
+            touchdown: 'waiting'
+          } 
+        },
         { sort: { timestamp: -1 } }
       );
     }
 
-    // Promote next queued vehicle
+    // Promote next queued vehicle and set proper touchdown status
     const nextQueued = await EntryLog.findOneAndUpdate(
       { 
         action: clearedLog.action,
@@ -282,8 +331,8 @@ exports.clearVehicle = async (req, res) => {
 
     if (nextQueued) {
       // Get the vehicle details to ensure we have the correct status
-      const vehicle = await Vehicle.findOne({ plateNumber: nextQueued.plateNumber });
-      const vehicleStatus = vehicle?.status || 'Ok';
+      const promotedVehicle = await Vehicle.findOne({ plateNumber: nextQueued.plateNumber });
+      const vehicleStatus = promotedVehicle?.status || 'Ok';
       // Get the original entry log for timeIN
       const originalEntry = await EntryLog.findOne({
         plateNumber: nextQueued.plateNumber,
@@ -302,10 +351,9 @@ exports.clearVehicle = async (req, res) => {
           queueing_number: nextQueued.queueing_number,
           Pass: nextQueued.Pass || nextQueued.vehicle?.Pass || (nextQueued.FD === 'FD1' ? 'Pila' : 'Taxi'),
           timeIN: originalEntry?.timeIN || nextQueued.timeIN,
-           // Include ticket ID and QR data for promoted vehicles
-           status: vehicleStatus, 
-           ticket_id: isExit ? ticketId : undefined,
-           qr_code_data: isExit ? qrData : undefined
+          status: vehicleStatus, 
+          ticket_id: isExit ? ticketId : undefined,
+          qr_code_data: isExit ? qrData : undefined
         }
       });
     }
@@ -505,37 +553,51 @@ exports.validateQrCode = async (req, res) => {
     // Find the entry log
     const entryLog = await EntryLog.findOne({
       plateNumber: plateNumber.toUpperCase(),
-      ticket_id: ticketId,
-      FD: fd
+      ticket_id: ticketId
     });
 
     if (!entryLog) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Ticket not found for this vehicle and FD' 
+        message: 'Ticket not found for this vehicle' 
       });
     }
 
-
-    // Check if already scanned
-    if (!['ongoing', 'waiting', 'dispatch'].includes(entryLog.touchdown)) {
+    // Check if already scanned/exited
+    if (entryLog.touchdown === 'Exited Successfully') {
       return res.json({ 
         success: false, 
-        message: 'Ticket already scanned',
+        message: 'Vehicle already exited successfully',
         touchdown: entryLog.touchdown
+      });
+    }
+
+    // Check if no ticket or no exit scan
+    if (!entryLog.ticket_id || !entryLog.timeOut) {
+      await Vehicle.findOneAndUpdate(
+        { plateNumber: plateNumber.toUpperCase() },
+        { $set: { penaltyStatus: 'Penalty' } }
+      );
+
+      await EntryLog.findByIdAndUpdate(entryLog._id, {
+        $set: { touchdown: 'Exited/No ticket or no exit' }
+      });
+
+      return res.json({ 
+        success: false, 
+        message: 'No ticket or no exit recorded, Penalty applied',
+        touchdown: 'Exited/No ticket or no exit'
       });
     }
 
     // Check if expired (more than 24 hours old)
     const isExpired = moment().diff(entryLog.timeOut, 'hours') > 24;
     if (isExpired) {
-      // Update vehicle status to penalty
       await Vehicle.findOneAndUpdate(
         { plateNumber: plateNumber.toUpperCase() },
-        { $set: { status: 'Penalty' } }
+        { $set: { penaltyStatus: 'Penalty' } }
       );
 
-      // Update entry log
       await EntryLog.findByIdAndUpdate(entryLog._id, {
         $set: { touchdown: 'Exited/Expired ticket' }
       });
@@ -549,7 +611,7 @@ exports.validateQrCode = async (req, res) => {
 
     // Check if correct FD (FD1)
     if (entryLog.FD === 'FD1') {
-      // Update entry log
+      // Update entry log - exited successfully, NO penalty status change here
       await EntryLog.findByIdAndUpdate(entryLog._id, {
         $set: { touchdown: 'Exited Successfully' }
       });
@@ -560,10 +622,10 @@ exports.validateQrCode = async (req, res) => {
         touchdown: 'Exited Successfully'
       });
     } else {
-      // Wrong FD - update vehicle status and entry log
+      // Wrong FD - update vehicle penalty status and entry log
       await Vehicle.findOneAndUpdate(
         { plateNumber: plateNumber.toUpperCase() },
-        { $set: { status: 'Penalty' } }
+        { $set: { penaltyStatus: 'Penalty' } }
       );
 
       await EntryLog.findByIdAndUpdate(entryLog._id, {
@@ -572,7 +634,7 @@ exports.validateQrCode = async (req, res) => {
 
       return res.json({ 
         success: false, 
-        message: 'Wrong FD, Penalty',
+        message: 'Wrong FD, Penalty applied',
         touchdown: 'Exited/Wrong Endpoint'
       });
     }
@@ -588,8 +650,23 @@ exports.validateQrCode = async (req, res) => {
 
 exports.updateVehicleStatus = async (req, res) => {
   try {
-    const { plateNumber, touchdown, status, entryLogId } = req.body;
+    const { plateNumber, touchdown, status, penaltyStatus, entryLogId } = req.body;
     
+    const updateData = {};
+    
+    notifySystemUpdate();
+
+    
+    // Update penaltyStatus if provided
+    if (penaltyStatus) {
+      updateData.penaltyStatus = penaltyStatus;
+    }
+    
+    // Update status if provided (for backward compatibility)
+    if (status) {
+      updateData.status = status;
+    }
+
     // Validate required fields
     if (!plateNumber || !touchdown || !status) {
       return res.status(400).json({ 
@@ -652,7 +729,6 @@ exports.validateQrCodeFD2 = async (req, res) => {
   try {
     const { qrData } = req.body;
     
-    // Parse the simplified QR format (vehicle:plate|ticket:id|fd:FD)
     const qrParts = qrData.split('|');
     if (qrParts.length !== 3) {
       return res.status(400).json({ 
@@ -665,40 +741,53 @@ exports.validateQrCodeFD2 = async (req, res) => {
     const ticketId = qrParts[1].split(':')[1];
     const fd = qrParts[2].split(':')[1];
 
-    // Find the entry log
     const entryLog = await EntryLog.findOne({
       plateNumber: plateNumber.toUpperCase(),
-      ticket_id: ticketId,
-      FD: fd
+      ticket_id: ticketId
     });
 
     if (!entryLog) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Ticket not found for this vehicle and FD' 
+        message: 'Ticket not found for this vehicle' 
       });
     }
 
-
-    // Check if already scanned
-    if (!['ongoing', 'waiting', 'dispatch'].includes(entryLog.touchdown)) {
+    // Check if already scanned/exited
+    if (entryLog.touchdown === 'Exited Successfully') {
       return res.json({ 
         success: false, 
-        message: 'Ticket already scanned',
+        message: 'Vehicle already exited successfully',
         touchdown: entryLog.touchdown
       });
     }
 
-    // Check if expired (more than 24 hours old)
-    const isExpired = moment().diff(entryLog.timeOut, 'hours') > 24;
-    if (isExpired) {
-      // Update vehicle status to penalty
+    // Check if no ticket or no exit scan
+    if (!entryLog.ticket_id || !entryLog.timeOut) {
       await Vehicle.findOneAndUpdate(
         { plateNumber: plateNumber.toUpperCase() },
-        { $set: { status: 'Penalty' } }
+        { $set: { penaltyStatus: 'Penalty' } }
       );
 
-      // Update entry log
+      await EntryLog.findByIdAndUpdate(entryLog._id, {
+        $set: { touchdown: 'Exited/No ticket or no exit' }
+      });
+
+      return res.json({ 
+        success: false, 
+        message: 'No ticket or no exit recorded, Penalty applied',
+        touchdown: 'Exited/No ticket or no exit'
+      });
+    }
+
+    // Check if expired
+    const isExpired = moment().diff(entryLog.timeOut, 'hours') > 24;
+    if (isExpired) {
+      await Vehicle.findOneAndUpdate(
+        { plateNumber: plateNumber.toUpperCase() },
+        { $set: { penaltyStatus: 'Penalty' } }
+      );
+
       await EntryLog.findByIdAndUpdate(entryLog._id, {
         $set: { touchdown: 'Exited/Expired ticket' }
       });
@@ -712,7 +801,6 @@ exports.validateQrCodeFD2 = async (req, res) => {
 
     // Check if correct FD (FD2)
     if (entryLog.FD === 'FD2') {
-      // Update entry log
       await EntryLog.findByIdAndUpdate(entryLog._id, {
         $set: { touchdown: 'Exited Successfully' }
       });
@@ -723,10 +811,10 @@ exports.validateQrCodeFD2 = async (req, res) => {
         touchdown: 'Exited Successfully'
       });
     } else {
-      // Wrong FD - update vehicle status and entry log
+      // Wrong FD
       await Vehicle.findOneAndUpdate(
         { plateNumber: plateNumber.toUpperCase() },
-        { $set: { status: 'Penalty' } }
+        { $set: { penaltyStatus: 'Penalty' } }
       );
 
       await EntryLog.findByIdAndUpdate(entryLog._id, {
@@ -735,7 +823,7 @@ exports.validateQrCodeFD2 = async (req, res) => {
 
       return res.json({ 
         success: false, 
-        message: 'Wrong FD, Penalty',
+        message: 'Wrong FD, Penalty applied',
         touchdown: 'Exited/Wrong Endpoint'
       });
     }
@@ -749,9 +837,23 @@ exports.validateQrCodeFD2 = async (req, res) => {
   }
 };
 
+
+
 exports.updateVehicleStatus = async (req, res) => {
   try {
-    const { plateNumber, touchdown, status, entryLogId } = req.body;
+    const { plateNumber, touchdown, status, penaltyStatus, entryLogId } = req.body;
+
+    const updateData = {};
+
+    // Update penaltyStatus if provided
+    if (penaltyStatus) {
+      updateData.penaltyStatus = penaltyStatus;
+    }
+    
+    // Update status if provided (for backward compatibility)
+    if (status) {
+      updateData.status = status;
+    }
     
     // Validate required fields
     if (!plateNumber || !touchdown || !status) {
@@ -811,7 +913,6 @@ exports.validateQrCodeFD3 = async (req, res) => {
   try {
     const { qrData } = req.body;
     
-    // Parse the simplified QR format (vehicle:plate|ticket:id|fd:FD)
     const qrParts = qrData.split('|');
     if (qrParts.length !== 3) {
       return res.status(400).json({ 
@@ -824,40 +925,53 @@ exports.validateQrCodeFD3 = async (req, res) => {
     const ticketId = qrParts[1].split(':')[1];
     const fd = qrParts[2].split(':')[1];
 
-    // Find the entry log
     const entryLog = await EntryLog.findOne({
       plateNumber: plateNumber.toUpperCase(),
-      ticket_id: ticketId,
-      FD: fd
+      ticket_id: ticketId
     });
 
     if (!entryLog) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Ticket not found for this vehicle and FD' 
+        message: 'Ticket not found for this vehicle' 
       });
     }
 
-
-    // Check if already scanned
-    if (!['ongoing', 'waiting', 'dispatch'].includes(entryLog.touchdown)) {
+    // Check if already scanned/exited
+    if (entryLog.touchdown === 'Exited Successfully') {
       return res.json({ 
         success: false, 
-        message: 'Ticket already scanned',
+        message: 'Vehicle already exited successfully',
         touchdown: entryLog.touchdown
       });
     }
 
-    // Check if expired (more than 24 hours old)
-    const isExpired = moment().diff(entryLog.timeOut, 'hours') > 24;
-    if (isExpired) {
-      // Update vehicle status to penalty
+    // Check if no ticket or no exit scan
+    if (!entryLog.ticket_id || !entryLog.timeOut) {
       await Vehicle.findOneAndUpdate(
         { plateNumber: plateNumber.toUpperCase() },
-        { $set: { status: 'Penalty' } }
+        { $set: { penaltyStatus: 'Penalty' } }
       );
 
-      // Update entry log
+      await EntryLog.findByIdAndUpdate(entryLog._id, {
+        $set: { touchdown: 'Exited/No ticket or no exit' }
+      });
+
+      return res.json({ 
+        success: false, 
+        message: 'No ticket or no exit recorded, Penalty applied',
+        touchdown: 'Exited/No ticket or no exit'
+      });
+    }
+
+    // Check if expired
+    const isExpired = moment().diff(entryLog.timeOut, 'hours') > 24;
+    if (isExpired) {
+      await Vehicle.findOneAndUpdate(
+        { plateNumber: plateNumber.toUpperCase() },
+        { $set: { penaltyStatus: 'Penalty' } }
+      );
+
       await EntryLog.findByIdAndUpdate(entryLog._id, {
         $set: { touchdown: 'Exited/Expired ticket' }
       });
@@ -871,7 +985,6 @@ exports.validateQrCodeFD3 = async (req, res) => {
 
     // Check if correct FD (FD3)
     if (entryLog.FD === 'FD3') {
-      // Update entry log
       await EntryLog.findByIdAndUpdate(entryLog._id, {
         $set: { touchdown: 'Exited Successfully' }
       });
@@ -882,10 +995,10 @@ exports.validateQrCodeFD3 = async (req, res) => {
         touchdown: 'Exited Successfully'
       });
     } else {
-      // Wrong FD - update vehicle status and entry log
+      // Wrong FD
       await Vehicle.findOneAndUpdate(
         { plateNumber: plateNumber.toUpperCase() },
-        { $set: { status: 'Penalty' } }
+        { $set: { penaltyStatus: 'Penalty' } }
       );
 
       await EntryLog.findByIdAndUpdate(entryLog._id, {
@@ -894,7 +1007,7 @@ exports.validateQrCodeFD3 = async (req, res) => {
 
       return res.json({ 
         success: false, 
-        message: 'Wrong FD, Penalty',
+        message: 'Wrong FD, Penalty applied',
         touchdown: 'Exited/Wrong Endpoint'
       });
     }
@@ -970,7 +1083,6 @@ exports.validateQrCodeFD4 = async (req, res) => {
   try {
     const { qrData } = req.body;
     
-    // Parse the simplified QR format (vehicle:plate|ticket:id|fd:FD)
     const qrParts = qrData.split('|');
     if (qrParts.length !== 3) {
       return res.status(400).json({ 
@@ -983,40 +1095,53 @@ exports.validateQrCodeFD4 = async (req, res) => {
     const ticketId = qrParts[1].split(':')[1];
     const fd = qrParts[2].split(':')[1];
 
-    // Find the entry log
     const entryLog = await EntryLog.findOne({
       plateNumber: plateNumber.toUpperCase(),
-      ticket_id: ticketId,
-      FD: fd
+      ticket_id: ticketId
     });
 
     if (!entryLog) {
       return res.status(404).json({ 
         success: false, 
-        message: 'Ticket not found for this vehicle and FD' 
+        message: 'Ticket not found for this vehicle' 
       });
     }
 
-
-    // Check if already scanned
-    if (!['ongoing', 'waiting', 'dispatch'].includes(entryLog.touchdown)) {
+    // Check if already scanned/exited
+    if (entryLog.touchdown === 'Exited Successfully') {
       return res.json({ 
         success: false, 
-        message: 'Ticket already scanned',
+        message: 'Vehicle already exited successfully',
         touchdown: entryLog.touchdown
       });
     }
 
-    // Check if expired (more than 24 hours old)
-    const isExpired = moment().diff(entryLog.timeOut, 'hours') > 24;
-    if (isExpired) {
-      // Update vehicle status to penalty
+    // Check if no ticket or no exit scan
+    if (!entryLog.ticket_id || !entryLog.timeOut) {
       await Vehicle.findOneAndUpdate(
         { plateNumber: plateNumber.toUpperCase() },
-        { $set: { status: 'Penalty' } }
+        { $set: { penaltyStatus: 'Penalty' } }
       );
 
-      // Update entry log
+      await EntryLog.findByIdAndUpdate(entryLog._id, {
+        $set: { touchdown: 'Exited/No ticket or no exit' }
+      });
+
+      return res.json({ 
+        success: false, 
+        message: 'No ticket or no exit recorded, Penalty applied',
+        touchdown: 'Exited/No ticket or no exit'
+      });
+    }
+
+    // Check if expired
+    const isExpired = moment().diff(entryLog.timeOut, 'hours') > 24;
+    if (isExpired) {
+      await Vehicle.findOneAndUpdate(
+        { plateNumber: plateNumber.toUpperCase() },
+        { $set: { penaltyStatus: 'Penalty' } }
+      );
+
       await EntryLog.findByIdAndUpdate(entryLog._id, {
         $set: { touchdown: 'Exited/Expired ticket' }
       });
@@ -1030,7 +1155,6 @@ exports.validateQrCodeFD4 = async (req, res) => {
 
     // Check if correct FD (FD4)
     if (entryLog.FD === 'FD4') {
-      // Update entry log
       await EntryLog.findByIdAndUpdate(entryLog._id, {
         $set: { touchdown: 'Exited Successfully' }
       });
@@ -1041,10 +1165,10 @@ exports.validateQrCodeFD4 = async (req, res) => {
         touchdown: 'Exited Successfully'
       });
     } else {
-      // Wrong FD - update vehicle status and entry log
+      // Wrong FD
       await Vehicle.findOneAndUpdate(
         { plateNumber: plateNumber.toUpperCase() },
-        { $set: { status: 'Penalty' } }
+        { $set: { penaltyStatus: 'Penalty' } }
       );
 
       await EntryLog.findByIdAndUpdate(entryLog._id, {
@@ -1053,7 +1177,7 @@ exports.validateQrCodeFD4 = async (req, res) => {
 
       return res.json({ 
         success: false, 
-        message: 'Wrong FD, Penalty',
+        message: 'Wrong FD, Penalty applied',
         touchdown: 'Exited/Wrong Endpoint'
       });
     }
@@ -1123,7 +1247,67 @@ exports.updateVehicleStatus = async (req, res) => {
   }
 };
 //----------------------------------------fd4 scanning functions end------------------------------------
+// Add this new method to your EntranceController.js
+exports.applyVehiclePenalty = async (req, res) => {
+  try {
+    const { plateNumber, touchdown, entryLogId } = req.body;
+    
+    // Validate required fields
+    if (!plateNumber || !touchdown) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required fields' 
+      });
+    }
 
+    // Update entry log touchdown
+    if (entryLogId) {
+      const updatedLog = await EntryLog.findByIdAndUpdate(
+        entryLogId,
+        { $set: { touchdown: touchdown } },
+        { new: true }
+      );
+
+      if (!updatedLog) {
+        return res.status(404).json({ 
+          success: false, 
+          message: 'Entry log not found' 
+        });
+      }
+    }
+
+    // Update vehicle penalty status to 'Penalty'
+    const vehicleUpdate = await Vehicle.findOneAndUpdate(
+      { plateNumber: plateNumber.toUpperCase() },
+      { 
+        $set: { 
+          penaltyStatus: 'Penalty',
+          status: 'Ok' // Keep status as Ok, only penaltyStatus changes
+        } 
+      },
+      { new: true }
+    );
+
+    if (!vehicleUpdate) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Vehicle not found' 
+      });
+    }
+    
+    res.json({ 
+      success: true,
+      message: 'Penalty applied successfully'
+    });
+  } catch (error) {
+    console.error('Apply penalty error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to apply penalty',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
 ////---------------------------Prevent entry if Penalty start--------------------------------------------
 // In entranceController.js
 exports.checkVehicleStatus = async (req, res) => {
@@ -1147,6 +1331,7 @@ exports.checkVehicleStatus = async (req, res) => {
     res.json({
       success: true,
       status: vehicle.status || 'Ok',
+       penaltyStatus: vehicle.penaltyStatus || 'None',
       plateNumber: vehicle.plateNumber
     });
   } catch (error) {
@@ -1345,6 +1530,188 @@ exports.getPenaltyVehicles = async (req, res) => {
     });
   }
 };
+
+// jc start
+// Add to EntranceController.js
+// Updated Trip Statistics function
+exports.getTripStatistics = async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Ongoing trips - Pila vehicles with touchdown 'waiting' and isPass 'pila'
+    const ongoingTrips = await EntryLog.countDocuments({
+      timeIN: { $gte: today },
+      touchdown: 'waiting',
+      Pass: 'Pila',
+      FD: 'FD1' // Only FD1 vehicles for Pila
+    });
+
+    // Finished trips - Pila vehicles that successfully completed their trip
+    const finishedTrips = await EntryLog.countDocuments({
+      timeOut: { $gte: today },
+      touchdown: 'Exited Successfully',
+      Pass: 'Pila',
+      FD: 'FD1'
+    });
+
+    res.json({
+      success: true,
+      ongoingTrips,
+      finishedTrips,
+      totalTripsToday: ongoingTrips + finishedTrips
+    });
+  } catch (error) {
+    console.error('Trip statistics error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to get trip statistics' 
+    });
+  }
+};
+
+// Updated Penalty Statistics function
+exports.getPenaltyStatistics = async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Penalties today - fetch from EntryLogs using touchdown data
+    const penaltiesToday = await EntryLog.countDocuments({
+      timeOut: { $gte: today, $lt: tomorrow },
+      touchdown: { 
+        $in: [
+          'Exited/Wrong Endpoint', 
+          'Exited/No ticket or no exit', 
+          'Exited/Expired ticket',
+          'Flagdown'
+        ] 
+      }
+    });
+
+    // Get detailed list of penalties today for the frontend
+    const penaltiesTodayList = await EntryLog.find({
+      timeOut: { $gte: today, $lt: tomorrow },
+      touchdown: { 
+        $in: [
+          'Exited/Wrong Endpoint', 
+          'Exited/No ticket or no exit', 
+          'Exited/Expired ticket',
+          'Flagdown'
+        ] 
+      }
+    })
+    .select('plateNumber touchdown timeOut FD Pass route')
+    .sort({ timeOut: -1 })
+    .lean();
+
+    // Penalties lifted today - fetch from EntryLogs using touchdown data
+    const liftedTodayList = await EntryLog.find({
+      timeOut: { $gte: today, $lt: tomorrow },
+      $or: [
+        { touchdown: 'Penalty lifted' },
+        { touchdown: 'Penalty Lifted' },
+        { touchdown: { $regex: 'penalty.*lifted', $options: 'i' } }
+      ]
+    })
+    .select('plateNumber touchdown timeOut FD Pass route')
+    .sort({ timeOut: -1 })
+    .lean();
+
+    const penaltiesLiftedToday = liftedTodayList.length;
+
+    // Total active penalties (from Vehicle collection for reference)
+    const totalPenalties = await Vehicle.countDocuments({
+      penaltyStatus: 'Penalty'
+    });
+
+    res.json({
+      success: true,
+      penaltiesToday,
+      penaltiesLiftedToday,
+      totalPenalties,
+      penaltiesTodayList: penaltiesTodayList.map(vehicle => ({
+        plateNumber: vehicle.plateNumber,
+        reason: vehicle.touchdown,
+        timeOut: vehicle.timeOut?.toISOString(),
+        FD: vehicle.FD,
+        Pass: vehicle.Pass,
+        route: vehicle.route
+      })),
+      liftedTodayList: liftedTodayList.map(vehicle => ({
+        plateNumber: vehicle.plateNumber,
+        penaltyLiftedAt: vehicle.timeOut?.toISOString(),
+        FD: vehicle.FD,
+        Pass: vehicle.Pass,
+        route: vehicle.route
+      }))
+    });
+  } catch (error) {
+    console.error('Penalty statistics error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to get penalty statistics' 
+    });
+  }
+};
+
+// Add this function for getting penalty lifted vehicles specifically
+exports.getPenaltyLiftedVehicles = async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    // Find entry logs with penalty lifted touchdown status from today
+    const penaltyLiftedLogs = await EntryLog.find({
+      timeOut: { $gte: today, $lt: tomorrow },
+      $or: [
+        { touchdown: 'Penalty lifted' },
+        { touchdown: 'Penalty Lifted' },
+        { touchdown: { $regex: 'penalty.*lifted', $options: 'i' } }
+      ]
+    })
+    .select('plateNumber timeOut FD Pass route touchdown')
+    .sort({ timeOut: -1 })
+    .lean();
+
+    // Get vehicle details for each log
+    const result = await Promise.all(
+      penaltyLiftedLogs.map(async (log) => {
+        const vehicle = await Vehicle.findOne({ plateNumber: log.plateNumber });
+        return {
+          plateNumber: log.plateNumber,
+          timeOut: log.timeOut,
+          penaltyLiftedAt: log.timeOut,
+          FD: log.FD,
+          Pass: log.Pass,
+          route: log.route,
+          touchdown: log.touchdown,
+          vehicleStatus: vehicle?.status || 'Unknown',
+          penaltyStatus: vehicle?.penaltyStatus || 'None',
+          entryLogId: log._id
+        };
+      })
+    );
+
+    res.json({
+      success: true,
+      count: result.length,
+      vehicles: result
+    });
+  } catch (error) {
+    console.error('Error fetching penalty lifted vehicles:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+// jc end
 //----------------------------------------ADmin dashboard -----------------------------------------
 
 // Add to entranceController.js
@@ -1403,6 +1770,97 @@ exports.getActiveVehicles = async (req, res) => {
       success: false, 
       message: 'Failed to get active vehicles',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// In your websocket handler on the backend, add:
+const handlePenaltyUpdate = (ws, data) => {
+  const { type, plateNumber, vehicleId } = data;
+  
+  if (type === 'penalty_lifted') {
+    // Broadcast to all connected clients
+    broadcastToAll({
+      type: 'penalty_lifted',
+      plateNumber,
+      vehicleId,
+      timestamp: new Date().toISOString(),
+      message: `Penalty lifted for ${plateNumber}`
+    });
+  }
+  
+  if (type === 'request_penalty_update') {
+    // Send current penalty data
+    sendPenaltyData(ws);
+  }
+};
+
+const sendPenaltyData = async (ws) => {
+  try {
+    const penaltyVehicles = await Vehicle.find({ 
+      penaltyStatus: { $in: ['Penalty', 'Lifted'] } 
+    });
+    
+    ws.send(JSON.stringify({
+      type: 'penalty_data',
+      data: penaltyVehicles,
+      timestamp: new Date().toISOString()
+    }));
+  } catch (error) {
+    console.error('Error sending penalty data:', error);
+  }
+};
+
+
+
+// In your vehicle controller, update the penalty lifting function
+exports.liftVehiclePenalty = async (req, res) => {
+  try {
+    const { plateNumber, entryLogId } = req.body;
+    
+    // Update vehicle penalty status
+    const updatedVehicle = await Vehicle.findOneAndUpdate(
+      { plateNumber: plateNumber.toUpperCase() },
+      { 
+        $set: { 
+          penaltyStatus: 'Lifted',
+          penaltyLiftedAt: new Date()
+        }
+      },
+      { new: true }
+    );
+
+    if (!updatedVehicle) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Vehicle not found' 
+      });
+    }
+
+    // Update entry log if provided - only set Penalty Lifted if it was a penalty status
+    if (entryLogId) {
+      const currentLog = await EntryLog.findById(entryLogId);
+      if (currentLog && currentLog.touchdown.includes('Penalty') || currentLog.touchdown.includes('Exited/')) {
+        await EntryLog.findByIdAndUpdate(entryLogId, {
+          $set: { touchdown: 'Penalty Lifted' }
+        });
+      }
+      // Don't overwrite ongoing, waiting, or dispatch statuses
+    }
+
+    // Notify all connected clients via WebSocket
+    notifyPenaltyLifted(updatedVehicle.plateNumber, updatedVehicle._id);
+
+    res.json({ 
+      success: true,
+      message: 'Penalty lifted successfully',
+      vehicle: updatedVehicle
+    });
+  } catch (error) {
+    console.error('Lift penalty error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to lift penalty' 
     });
   }
 };

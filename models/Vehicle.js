@@ -1,105 +1,3 @@
-// const mongoose = require('mongoose');
-
-// const vehicleSchema = new mongoose.Schema({
-//   plateNumber: {
-//     type: String,
-//     required: true,
-//     unique: true,
-//     uppercase: true,
-//     trim: true
-//   },
-//   driverName: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   contact: {
-//     type: String,
-//     required: true,
-//     validate: {
-//       validator: function(v) {
-//         return /^\d{11}$/.test(v);
-//       },
-//       message: props => `${props.value} is not a valid 11-digit contact number!`
-//     }
-//   },
-//   address: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   operator: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   operatorAddress: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   route: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   ltfrb: {
-//     type: String,
-//     required: true,
-//     validate: {
-//       validator: function(v) {
-//         return /^\d{12}$/.test(v);
-//       },
-//       message: props => `${props.value} is not a valid 12-digit LTFRB number!`
-//     }
-//   },
-//   motorNo: {
-//     type: String,
-//     required: true,
-//     validate: {
-//       validator: function(v) {
-//         return /^\d{12}$/.test(v);
-//       },
-//       message: props => `${props.value} is not a valid 12-digit motor number!`
-//     }
-//   },
-//   yearModel: {
-//     type: Number,
-//     required: true,
-//     min: 1900,
-//     max: new Date().getFullYear()
-//   },
-//   model: {
-//     type: String,
-//     required: true,
-//     trim: true
-//   },
-//   registrationDate: {
-//     type: Date,
-//     required: true
-//   },
-//   expiryDate: {
-//     type: Date,
-//     required: true,
-//     validate: {
-//       validator: function(v) {
-//         return v > this.registrationDate;
-//       },
-//       message: 'Expiry date must be after registration date!'
-//     }
-//   },
-//   status: {
-//     type: String,
-//     enum: ['Ok', 'Expired', 'Penalty'], 
-//     default: 'Ok' 
-//   },
-//   createdAt: {
-//     type: Date,
-//     default: Date.now
-//   }
-// });
-
-// module.exports = mongoose.model('Vehicle', vehicleSchema);
 const mongoose = require('mongoose');
 
 const vehicleSchema = new mongoose.Schema({
@@ -146,7 +44,7 @@ const vehicleSchema = new mongoose.Schema({
     trim: true
   },
   FD: {
-    type: String,  // New FD field
+    type: String,
     default: null
   },
   ltfrb: {
@@ -190,30 +88,34 @@ const vehicleSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Ok', 'Expired', 'Penalty'], 
-    default: 'Ok' 
+    enum: ['Ok', 'Expired'], // Removed 'Penalty' from here
+    default: 'Ok'
   },
-  rfid: { 
-    type: String, 
-    trim: true, 
+  penaltyStatus: {
+    type: String,
+    enum: ['None', 'Penalty', 'Lifted'], // New penalty status field
+    default: 'None'
+  },
+  rfid: {
+    type: String,
+    trim: true,
     default: null,
-    required: false 
+    required: false
   },
- images: [{
+  images: [{
     _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
     data: Buffer,
     contentType: String,
     filename: String,
     size: Number,
     uploadedAt: { type: Date, default: Date.now }
-  }],
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
+  }]
+  
+}, {
+  timestamps: true // This adds createdAt AND updatedAt automatically
 });
 
-// 🛠️ Pre-save middleware: Assign FD based on the route before saving 
+// Pre-save middleware: Assign FD based on the route before saving
 vehicleSchema.pre('save', function(next) {
   const fdMapping = {
     "SanJose - Cabanatuan City": "FD1",
@@ -222,7 +124,7 @@ vehicleSchema.pre('save', function(next) {
     "SanJose - Baguio": "FD4"
   };
 
-  this.FD = fdMapping[this.route] || "Unknown"; // Assign FD based on route
+  this.FD = fdMapping[this.route] || "Unknown";
   next();
 });
 

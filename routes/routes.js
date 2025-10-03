@@ -40,7 +40,8 @@ router.post('/entryLogs/validateQrFD3', entranceController.validateQrCodeFD3);
 // In your routes file
 router.post('/validateQrFD4', entranceController.validateQrCodeFD4);
 router.post('/entryLogs/validateQrFD4', entranceController.validateQrCodeFD4);
-
+//all fd scanning
+router.post('/vehicles/applyPenalty', entranceController.applyVehiclePenalty);
 
 
 //Prevent entry if penalty
@@ -51,6 +52,18 @@ router.get('/system/state', entranceController.getSystemState);
 // In your routes file (usually routes.js or similar)
 router.get('/entryLogs/dashboardCounts', entranceController.getDashboardCounts);
 router.get('/vehicles/penaltyCount', entranceController.getPenaltyCount);
+// Add to routes.js
+// jc
+// Add to routes.js
+router.get('/entryLogs/penaltyLifted', entranceController.getPenaltyLiftedVehicles);
+
+router.get('/entryLogs/tripStatistics', entranceController.getTripStatistics);
+router.get('/entryLogs/penaltyStatistics', entranceController.getPenaltyStatistics);
+
+// In your routes file, add:
+// Add this route to your routes file
+router.post('/vehicles/liftPenalty', entranceController.liftVehiclePenalty);
+// jc end
 
 
 //admin vehicleController.js for fetch and update details vehicle_managfement.dart

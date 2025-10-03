@@ -8,6 +8,7 @@ const http = require('http');
 const { setupWebSocket, notifySystemUpdate, notifyEntryLogsUpdate } = require('./websocket/websocket');
 // const { setupWebSocket } = require('../queueing-system-backend/websocket/websocket');
 const fdRoutes = require('./routes/fdRoutes');
+const vehicleStatusService = require('./services/vehicleStatusService');
 // Load environment variables
 dotenv.config();
 
@@ -84,6 +85,7 @@ app.use((req, res, next) => {
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  vehicleStatusService.startDailyCheck();
 });
 
 // Handle unhandled promise rejections
