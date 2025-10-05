@@ -2,7 +2,7 @@
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
-const { sendOTPEmail } = require('../services/emailService');
+const { sendOTPEmail } = require('../services/emailServiceBrevo');
 
 // Generate secure 6-digit OTP
 const generateOTP = () => {
