@@ -246,6 +246,7 @@ exports.clearVehicle = async (req, res) => {
 
     // Update touchdown status - THIS IS THE KEY FIX
     if (isExit) {
+      if (clearedLog.touchdown !== 'canceled') {
       // Determine the correct touchdown status based on FD and Pass
       let touchdownStatus;
       if (clearedLog.FD === 'FD1' && clearedLog.Pass === 'Pila') {
@@ -281,6 +282,7 @@ exports.clearVehicle = async (req, res) => {
         },
         { sort: { timestamp: -1 } }
       );
+    }
     } else {
       // For entry actions: set to waiting after confirmation
       // Update the CURRENT entry log
@@ -1409,7 +1411,7 @@ exports.getDashboardCounts = async (req, res) => {
     // Total trips (completed today, not ongoing)
     const totalTrips = await EntryLog.countDocuments({
       timeOut: { $gte: today },
-      touchdown: { $ne: 'ongoing' }
+      touchdown: { $in: ['Exited Successfully'] }
     });
 
     // Pila count (completed today, not ongoing, with Pila pass)
@@ -1584,7 +1586,8 @@ exports.getPenaltyStatistics = async (req, res) => {
       touchdown: { 
         $in: [
           'Exited/Wrong Endpoint', 
-          'Exited/No ticket or no exit', 
+          'Exited/No Ticket', 
+          'Exited/No Exit',
           'Exited/Expired ticket',
           'Flagdown'
         ] 
@@ -1596,8 +1599,9 @@ exports.getPenaltyStatistics = async (req, res) => {
       timeOut: { $gte: today, $lt: tomorrow },
       touchdown: { 
         $in: [
-          'Exited/Wrong Endpoint', 
-          'Exited/No ticket or no exit', 
+          'Exited/Wrong Endpoint',
+          'Exited/No Ticket',  
+          'Exited/No Exit', 
           'Exited/Expired ticket',
           'Flagdown'
         ] 
