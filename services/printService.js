@@ -3,19 +3,20 @@ const print = require('printer');
 const printService = {
   printTicket: async (ticketData) => {
     try {
-      // Format ticket content
+      // Format ticket content - minimal and clean
       const ticketContent = `
-        T.C.P.U.S
-        SanJose City
-        Date: ${new Date().toLocaleDateString()}
-        ${ticketData.route ? `Route: ${ticketData.route}` : ''}
-        ${ticketData.FD ? `${ticketData.FD}` : ''}
-        ${ticketData.pass ? `${ticketData.pass}` : ''}
-        ${ticketData.queueNumber ? `${ticketData.queueNumber}` : ''}
-        Time In: ${ticketData.timeIn.toLocaleTimeString()}
-        ${ticketData.timeOut ? `Time Out: ${ticketData.timeOut.toLocaleTimeString()}` : ''}
-      `;
-      
+T.C.P.U.S
+SanJose City
+Date: ${new Date().toLocaleDateString()}
+${ticketData.queueNumber ? `Queue: ${ticketData.queueNumber}` : ''}
+${ticketData.route ? `Route: ${ticketData.route}` : ''}
+${ticketData.FD ? `${ticketData.FD}` : ''}
+${ticketData.pass ? `${ticketData.pass}` : ''}
+Time In: ${ticketData.timeIn.toLocaleTimeString()}
+${ticketData.timeOut ? `Time Out: ${ticketData.timeOut.toLocaleTimeString()}` : ''}
+
+`.trim(); // Remove leading/trailing whitespace
+
       // Print to default printer
       print.printDirect({
         data: ticketContent,

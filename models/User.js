@@ -35,6 +35,10 @@ const UserSchema = new mongoose.Schema({
     required: [true, 'Role is required'],
     default: "terminal"
   },
+    requiresPasswordSetup: {
+    type: Boolean,
+    default: false
+  },
   twoFactorEnabled: { 
     type: Boolean, 
     default: false 

@@ -1,6 +1,6 @@
 // services/emailServiceBrevo.js
 const SibApiV3Sdk = require('@sendinblue/client');
-
+const { sendPasswordSetupEmail } = require('./passwordSetupEmailService');
 // Initialize the API instance
 const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
 
@@ -54,4 +54,7 @@ const sendOTPEmail = async (email, otp) => {
   }
 };
 
-module.exports = { sendOTPEmail };
+module.exports = { 
+  sendOTPEmail, 
+  sendPasswordSetupEmail 
+};

@@ -4,6 +4,46 @@ const User = require("../models/User");
 
 const captchaChallenges = new Map();
 
+// Add to authController.js
+// In authController.js - update the verifyToken function
+exports.verifyToken = async (req, res) => {
+  try {
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({ valid: false, message: 'No token provided' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id).select('-password');
+    
+    if (!user) {
+      return res.status(401).json({ valid: false, message: 'User not found' });
+    }
+
+    if (user.disabled) {
+      return res.status(401).json({ valid: false, message: 'Account disabled' });
+    }
+
+    res.json({ 
+      valid: true, 
+      user: { 
+        id: user._id, 
+        role: user.role, 
+        username: user.username 
+      } 
+    });
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({ valid: false, message: 'Token expired' });
+    }
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({ valid: false, message: 'Invalid token' });
+    }
+    res.status(500).json({ valid: false, message: 'Server error' });
+  }
+};
+
 // Generate CAPTCHA challenge
 exports.generateCaptcha = async (req, res) => {
   try {

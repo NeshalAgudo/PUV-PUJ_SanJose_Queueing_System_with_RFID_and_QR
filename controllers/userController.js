@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const { adminOnly } = require('../middlewares/authMiddleware');
 const bcrypt = require('bcryptjs');
+const { sendPasswordSetupEmail } = require('../services/emailServiceBrevo'); 
 
 // Get all users (admin only)
 // controllers/userController.js
@@ -23,12 +24,12 @@ exports.getAllUsers = async (req, res) => {
   }
 };
 
-// Create a new user (admin only)
+// Create a new user without password (admin only)
 exports.createUser = async (req, res) => {
   try {
-    const { username, email, password, role } = req.body;
+    const { username, email, role } = req.body;
 
-        // Prevent creating new admin users
+    // Prevent creating new admin users
     if (role === 'Admin') {
       return res.status(403).json({ message: 'Cannot create admin users' });
     }
@@ -39,19 +40,31 @@ exports.createUser = async (req, res) => {
       return res.status(400).json({ message: 'User already exists' });
     }
 
-    // Create new user
+    // Generate a temporary password that user will change
+    const tempPassword = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-8);
+    
+    // Create new user with temporary password
     user = new User({
       username,
       email,
-      password,
-      role
+      password: tempPassword, // Temporary password
+      role,
+      requiresPasswordSetup: true // Add this field to track if user needs to set password
     });
 
-    // Hash password
+    // Hash the temporary password
     const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(password, salt);
+    user.password = await bcrypt.hash(tempPassword, salt);
 
     await user.save();
+
+    // Send password setup email
+    try {
+      await sendPasswordSetupEmail(email, username, tempPassword);
+    } catch (emailError) {
+      console.error('Failed to send password setup email:', emailError);
+      // Don't fail the user creation if email fails
+    }
 
     // Return user without sensitive data
     const userResponse = user.toObject();
